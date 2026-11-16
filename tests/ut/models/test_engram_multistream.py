@@ -76,14 +76,22 @@ def make_model():
     return model
 
 
-def test_pp_engram_uses_global_hash_slot_for_the_local_table(runtime, monkeypatch):
+@pytest.mark.parametrize("remote", [False, True])
+def test_pp_engram_uses_global_hash_slot_for_the_local_table(runtime, monkeypatch, remote):
     model = make_model()
     model.layers[1] = PPMissingLayer()
     buffers = model.prime_engram_v2_graph_inputs(4)
     assert set(buffers["engram_lookups"]) == set(buffers["engram_pending"]) == {2}
     table = model.layers[2].engram.embed_tokens
     table.dp_size = table.tp_size = 1
-    table.embed_gathered = Mock(side_effect=lambda hashes, count: hashes.unsqueeze(-1).expand(-1, -1, 2))
+    if remote:
+        reader = Mock()
+        reader.copy_hashes.side_effect = lambda values, *layout: values.numpy()
+        reader.lookup_layers.return_value = None
+        model._engram_remote_reader = reader
+        table._remote_reader = reader
+        table.head_start, table.part_n_hash_cols = 0, 4
+    table.embed_gathered = Mock(side_effect=lambda hashes, count, **kwargs: hashes.unsqueeze(-1).expand(-1, -1, 2))
     hashes = torch.stack((torch.full((2, 4), 11), torch.full((2, 4), 22)), dim=1)
     model.engram_hash = Mock(use_slot_cache=False)
     model.engram_hash.ensure_cache.return_value = True
@@ -99,6 +107,10 @@ def test_pp_engram_uses_global_hash_slot_for_the_local_table(runtime, monkeypatc
     assert set(lookups) == {2}
     torch.testing.assert_close(lookups[2], torch.full((2, 8), 22))
     torch.testing.assert_close(mask, torch.ones(2, dtype=torch.bool))
+    if remote:
+        local_hashes = reader.copy_hashes.call_args.args[0]
+        torch.testing.assert_close(local_hashes, hashes[:, 1:2])
+        assert reader.lookup_layers.call_args.args[0] == [table]
 
 
 def test_graph_events_are_reused_per_descriptor_and_primed_only_at_capture(runtime):
