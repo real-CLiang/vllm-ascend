@@ -551,6 +551,7 @@ def test_replay_preserves_pp_states_and_full_source_writes(runtime, monkeypatch,
             for index in range(model.start_layer, model.end_layer):
                 kept = rows if replay is not None and rows is not None and index >= model.decoder_replay_start else None
                 assert calls[index] == (positions[kept] if kept is not None else positions).tolist()
+        assert payload is not None
         actual, actual_aux = payload
         selected = rows if rows is not None else torch.arange(len(positions))
         torch.testing.assert_close(actual[selected], expected[selected], rtol=0, atol=0)
