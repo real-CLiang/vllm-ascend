@@ -70,11 +70,11 @@ class AscendDecoderReplayLayers:
                 if sharded:
                     state = tensor_model_parallel_all_gather(state, dim=0)
                 state = state.index_select(0, rows)
+                if sharded:
+                    state = state.chunk(get_tp_group().world_size)[get_tp_group().rank_in_group]
                 if self.num_padded_rows is not None:
                     padding = self.num_padded_rows - state.shape[0]
                     state = torch.cat((state, state.new_zeros((padding, *state.shape[1:]))))
-                if sharded:
-                    state = state.chunk(get_tp_group().world_size)[get_tp_group().rank_in_group]
                 replay_states.append(state)
             row_outputs = self.run_layers(*replay_states)
             for buffer in self.output_row_buffers:
@@ -93,9 +93,6 @@ class AscendDecoderReplayLayers:
                 output.index_copy_(0, rows[: self.num_actual_rows], row_output[: self.num_actual_rows])
                 if sharded:
                     tp = get_tp_group()
-                    padding = (-output.shape[0]) % tp.world_size
-                    if padding:
-                        output = torch.cat((output, output.new_zeros((padding, *output.shape[1:]))))
                     output = output.chunk(tp.world_size)[tp.rank_in_group]
                 outputs.append(output)
             return tuple(outputs)
@@ -173,8 +170,8 @@ def make_decoder_replay(model: "DeepseekV41Model", config: VllmConfig) -> Ascend
     replay_start = max(start, cut if trim_cut_layer else cut + 1)
     if replay_start >= model.end_layer:
         return None
-    if parallel.decode_context_parallel_size > 1 or parallel.use_ubatching:
-        reason = "DCP and microbatching need a separate replay layout"
+    if model.use_sequence_parallel or parallel.decode_context_parallel_size > 1 or parallel.use_ubatching:
+        reason = "SP, DCP and microbatching need a separate replay layout"
     elif config.compilation_config.cudagraph_mode not in (CUDAGraphMode.NONE, CUDAGraphMode.FULL_DECODE_ONLY):
         reason = "replay prefill requires eager execution; use NONE or FULL_DECODE_ONLY"
     elif any(layer > cut for layer in model.config.engram_layer_ids):
