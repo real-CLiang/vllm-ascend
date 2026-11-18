@@ -394,7 +394,7 @@ def _model_stage(start, end, embedding, use_sp, *, num_layers=6):
     model.norm = torch.nn.Identity() if end == num_layers else v41_model.PPMissingLayer()
     model.shared_attention_state = SimpleNamespace(reset=lambda: None)
     model._mtp_hidden_buffer = None
-    model.aux_hidden_state_layers = (1, 4)
+    model.aux_hidden_state_layers = (0, 1, 4)
     return model
 
 
@@ -431,7 +431,7 @@ def test_v41_pp_preserves_hc_pre_mix_and_aux_states(monkeypatch, partition, use_
     assert isinstance(incoming, tuple)
     actual, actual_aux = incoming
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
-    assert len(actual_aux) == len(expected_aux) == 2
+    assert len(actual_aux) == len(expected_aux) == 3
     for actual_state, expected_state in zip(actual_aux, expected_aux):
         torch.testing.assert_close(actual_state, expected_state, rtol=0, atol=0)
 
